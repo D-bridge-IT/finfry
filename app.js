@@ -37,28 +37,76 @@ function md(text) {
 }
 
 // ───────── Экраны ─────────
-function viewWelcome() {
-  return `<section class="welcome card">
-    <div class="fry big-fry">${FRY_SVG}</div>
-    <h1>Привет, я FinFry</h1>
-    <p class="lead">Малёк золотой рыбки и ваш налоговый штурман в Германии. Внесите доходы и расходы, загрузите чеки — я покажу, сколько налога выходит за год, что можно списать и к каким срокам готовиться.</p>
-    <form id="welcomeForm" class="grid2">
-      <label>Как к вам обращаться<input name="name" placeholder="Имя" autocomplete="given-name"></label>
-      <label>Чем вы зарабатываете<select name="status">${statusOptions('angestellt')}</select></label>
-      <label>Семейное положение<select name="joint"><option value="">Один / одна</option><option value="1">В браке, общая декларация</option></select></label>
-      <label>Детей<input name="kids" type="number" min="0" max="12" value="0" inputmode="numeric"></label>
-      <div class="actions span2">
-        <button class="btn primary" type="submit">Начать</button>
-        <button class="btn ghost" type="button" data-act="demo">Посмотреть на примере</button>
-      </div>
-    </form>
-    <p class="fine">Данные хранятся только в этом браузере и никуда не отправляются. Расчёт — оценка, а не налоговая консультация.</p>
-  </section>`;
+function qrow(e, kind) {
+  const type = e ? e.type : defaultType(kind);
+  return `<div class="qrow${e ? '' : ' ghost'}" data-kind="${kind}" data-id="${e ? e.id : ''}">
+    <select name="type" aria-label="Что это">${typeOptions(kind, type)}</select>
+    <input name="desc" value="${esc(e ? e.desc : '')}" placeholder="Заметка (необязательно)" aria-label="Заметка">
+    <input name="amount" type="number" step="0.01" min="0" inputmode="decimal" value="${e && Number(e.amount) ? e.amount : ''}" placeholder="0 €" aria-label="Сумма в евро">
+    <label class="qbtn clip${e && e.docId ? ' on' : ''}" title="Прикрепить чек (необязательно)">📎<input type="file" name="qfile" accept="image/*,application/pdf" hidden></label>
+    <button class="qbtn del" data-act="qdel" title="Удалить строку" aria-label="Удалить строку">×</button>
+  </div>`;
 }
+const yearEntries = kind => S.entries.filter(e => e.kind === kind && String(e.date).slice(0, 4) === String(S.year) && !String(e.id).startsWith('paid-'));
+const quickDate = () => String(S.year) === todayISO().slice(0, 4) ? todayISO() : S.year + '-12-31';
+const paidId = () => 'paid-' + S.year;
+
+function viewHome() {
+  const p = S.profile, paid = S.entries.find(e => e.id === paidId());
+  const who = [STATUS[p.status] || STATUS.angestellt, p.joint ? 'в браке' : 'без супруга', Number(p.kids) ? 'детей: ' + p.kids : 'без детей'].join(' · ');
+  return `
+  <header class="top"><div><p class="eyebrow">Налоговый год ${S.year}</p><h1>Впишите свои цифры</h1>
+    <p class="muted">Суммы за год в евро. Расчёт обновляется сразу, чеки загружать не обязательно.</p></div></header>
+  <div class="quick">
+    <div class="stack">
+      <section class="card"><h3>1. Доходы</h3>
+        <div class="qrows">${yearEntries('inc').map(e => qrow(e, 'inc')).join('')}${qrow(null, 'inc')}</div>
+        <p class="fine">Зарплату вписывайте брутто за год. Несколько источников — несколько строк.</p></section>
+      <section class="card"><h3>2. Расходы</h3>
+        <div class="qrows">${yearEntries('exp').map(e => qrow(e, 'exp')).join('')}${qrow(null, 'exp')}</div>
+        <p class="fine">Выберите, на что потратили, и впишите сумму. Есть чек — нажмите 📎, но это по желанию.</p></section>
+      <section class="card"><h3>3. Налог, который уже уплачен</h3>
+        <label>Удержано с зарплаты и внесено авансами за год, €
+          <input id="paidInput" type="number" step="0.01" min="0" inputmode="decimal" value="${paid && Number(paid.amount) ? paid.amount : ''}" placeholder="0 €"></label>
+        <p class="fine">Для зарплаты — строки 4–6 в Lohnsteuerbescheinigung. Не знаете — оставьте пустым.</p></section>
+      <p class="fine">Расчёт для: ${esc(who)}. <a href="#/profile">Изменить</a></p>
+    </div>
+    <aside id="result" class="result card" aria-live="polite">${resultHTML()}</aside>
+  </div>`;
+}
+function resultHTML() {
+  const r = R(), refund = r.balance < -1, due = r.balance > 1;
+  if (!r.incTotal) return `<div class="fry">${FRY_SVG}</div><h2>Итог появится здесь</h2><p class="muted">Впишите хотя бы один доход слева — и я сразу посчитаю налог.</p>`;
+  const tips = insights(S.profile, S.entries, S.year, r, eur).slice(1, 3);
+  return `<p class="eyebrow">Итог за ${S.year} · оценка</p>
+    <h2>${refund ? 'Вам должны вернуть' : due ? 'Нужно доплатить' : 'Вы в расчёте'}</h2>
+    <div class="rbig ${refund ? 'good' : due ? 'due' : ''}">≈ ${eur(Math.abs(r.balance))}</div>
+    <div class="mini"><span>Доходы</span><b>${eur(r.incTotal)}</b></div>
+    <div class="mini"><span>Облагается налогом</span><b>${eur(r.zve)}</b></div>
+    <div class="mini"><span>Налог за год</span><b>${eur(r.taxTotal)}</b></div>
+    <div class="mini"><span>Уже уплачено</span><b>${eur(r.paidTotal)}</b></div>
+    <details><summary>Как это посчитано</summary><table class="calc">${r.lines.filter(l => l.kind !== 'note').map(l => `<tr class="${l.kind}"><td>${esc(l.label)}</td><td>${l.value < 0 ? '− ' : ''}${eur(Math.abs(l.value))}</td></tr>`).join('')}</table></details>
+    ${tips.length ? `<ul class="tips">${tips.map(t => `<li class="${t.level}"><b>${esc(t.title)}</b><span>${esc(t.text)}</span></li>`).join('')}</ul>` : ''}
+    <a class="btn ghost" href="#/details">Подробный разбор и сроки</a>`;
+}
+const paintResult = () => { const el = $('#result'); if (el) el.innerHTML = resultHTML(); };
+async function quickChange(row, forceCreate = false) {
+  const amount = Number($('[name=amount]', row).value) || 0;
+  let e = S.entries.find(x => x.id === row.dataset.id);
+  if (!e) {
+    if (!(amount > 0) && !forceCreate) return null;
+    e = { id: row.dataset.id || DB.uid(), kind: row.dataset.kind, date: quickDate() };
+    if (!row.dataset.id) { row.dataset.id = e.id; row.classList.remove('ghost'); row.insertAdjacentHTML('afterend', qrow(null, row.dataset.kind)); }
+  }
+  const saved = await saveEntry({ ...e, type: $('[name=type]', row).value, amount, desc: $('[name=desc]', row).value });
+  paintResult();
+  return saved;
+}
+
 const STATUS = { angestellt: 'Работаю по найму', selbst: 'Фрилансер (Freiberufler)', gewerbe: 'Свой бизнес (Gewerbe)', mix: 'Найм + своё дело', other: 'Другое: пенсия, пособие, аренда' };
 const statusOptions = cur => Object.entries(STATUS).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${v}</option>`).join('');
 
-function viewHome() {
+function viewDetails() {
   const r = R(), p = S.profile, dl = deadlines(p, S.year), tips = insights(p, S.entries, S.year, r, eur);
   const refund = r.balance < -1, due = r.balance > 1;
   const title = !r.count ? 'Данных пока нет' : refund ? 'Вам должны вернуть' : due ? 'К доплате' : 'Вы в расчёте';
@@ -66,8 +114,8 @@ function viewHome() {
   const maxG = Math.max(1, ...Object.values(r.groups));
   const groupTitle = { wk: 'Работа по найму', ba: 'Бизнес', sa: 'Страховки и пенсия', agb: 'Лечение и чрезвычайное', h35: 'Дом (§ 35a)', vm: 'Сдача жилья' };
   return `
-  <header class="top"><div><p class="eyebrow">${p.name ? esc(p.name) + ', вот ваша' : 'Ваша'} налоговая ситуация</p><h1>Обзор за ${S.year}</h1></div>
-    <button class="btn ghost no-print" data-act="print">Отчёт для печати</button></header>
+  <header class="top"><div><p class="eyebrow">${p.name ? esc(p.name) + ', вот ваша' : 'Ваша'} налоговая ситуация</p><h1>Подробный разбор за ${S.year}</h1></div>
+    <div class="actions no-print"><a class="btn ghost" href="#/entries">Все записи</a><button class="btn ghost" data-act="print">Отчёт для печати</button></div></header>
   <section class="hero ${refund ? 'good' : due ? 'due' : ''}">
     <div class="hero-main">
       <p class="eyebrow">Оценка по вашим данным</p>
@@ -288,9 +336,9 @@ function openAiSettings() {
 async function saveEntry(e) {
   const entry = { id: e.id || DB.uid(), kind: e.kind, type: e.type, amount: Math.round(Number(e.amount) * 100) / 100, date: e.date, desc: (e.desc || '').trim(),
                   vat: Number(e.vat) || 0, withheld: Number(e.withheld) || 0, person: e.person === 'b' ? 'b' : 'a', docId: e.docId || undefined };
-  await DB.put('entries', entry);
   const i = S.entries.findIndex(x => x.id === entry.id);
   if (i >= 0) S.entries[i] = entry; else S.entries.push(entry);
+  await DB.put('entries', entry);
   return entry;
 }
 async function addDoc(file) {
@@ -357,33 +405,16 @@ function download(name, text, type) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-async function loadDemo() {
-  const y = S.year, d = (m, day) => y + '-' + String(m).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-  S.profile = { name: 'Алекс', status: 'mix', joint: false, kids: 1, church: 0, klein: false, hebesatz: 400, km: 18, commuteDays: 150, hoDays: 60 };
-  await DB.put('kv', S.profile, 'profile');
-  const rows = [
-    ['inc', 'lohn', 46800, d(12, 31), 'Зарплата за год, Muster GmbH', 0, 7900],
-    ['inc', 'gewerbe', 6200, d(3, 28), 'Комиссия, 1-й квартал', 0], ['inc', 'gewerbe', 7400, d(6, 30), 'Комиссия, 2-й квартал', 0], ['inc', 'gewerbe', 5900, d(9, 30), 'Комиссия, 3-й квартал', 0],
-    ['inc', 'kapital', 1450, d(12, 31), 'Проценты и дивиденды', 0, 118],
-    ['exp', 'wk_arbeitsmittel', 689, d(2, 14), 'Ноутбук Lenovo', 0], ['exp', 'wk_fortbildung', 420, d(5, 6), 'Курс немецкого C1', 0],
-    ['exp', 'ba_software', 239.88, d(1, 10), 'Подписки: CRM и облако', 19], ['exp', 'ba_werbung', 780, d(4, 2), 'Реклама в соцсетях', 19],
-    ['exp', 'ba_fahrt', 1260, d(11, 1), 'Поездки к клиентам: 4 200 км × 0,30 €', 0], ['exp', 'ba_bewirtung', 310, d(7, 19), 'Обеды с клиентами', 19],
-    ['exp', 'ba_beratung', 595, d(8, 5), 'Steuerberater', 19],
-    ['exp', 'sa_kv', 4380, d(12, 31), 'Kranken- и Pflegeversicherung', 0], ['exp', 'sa_rente', 4352, d(12, 31), 'Rentenversicherung', 0],
-    ['exp', 'sa_vers', 286, d(1, 15), 'Haftpflicht и Unfall', 0], ['exp', 'sa_spenden', 150, d(12, 10), 'Пожертвование', 0], ['exp', 'sa_kita', 2400, d(12, 1), 'Детский сад', 0],
-    ['exp', 'agb_krank', 640, d(10, 3), 'Стоматолог, доплата', 0], ['exp', 'h35_dienst', 520, d(6, 15), 'Nebenkosten: уборка и сад', 0],
-    ['pay', 'est_vz', 1200, d(9, 10), 'Vorauszahlung', 0],
-  ];
-  for (const [kind, type, amount, date, desc, vat, withheld] of rows) await saveEntry({ kind, type, amount, date, desc, vat, withheld });
-  location.hash = '#/home'; render(true); toast('Загружен пример. Удалить его можно в профиле.');
-}
-
 const ACT = {
   add: () => openEntry({ kind: S.filter === 'all' ? 'exp' : S.filter }),
   edit: el => openEntry(S.entries.find(e => e.id === el.dataset.id)),
   close: () => dlg().close(),
   filter: el => { S.filter = el.dataset.v; render(); },
-  demo: loadDemo,
+  async qdel(el) {
+    const row = el.closest('.qrow'), id = row.dataset.id;
+    if (!id) return;
+    S.entries = S.entries.filter(e => e.id !== id); await DB.del('entries', id); row.remove(); paintResult();
+  },
   print: () => window.print(),
   ask: el => ask(el.dataset.v),
   aiSettings: openAiSettings,
@@ -406,7 +437,7 @@ const ACT = {
   async export() { download('finfry-backup-' + todayISO() + '.json', JSON.stringify(await DB.exportAll()), 'application/json'); toast('Копия сохранена в загрузки'); },
   async wipe() {
     if (!confirm('Удалить профиль, все записи, документы и переписку? Это нельзя отменить.')) return;
-    await DB.wipe(); S.profile = null; S.entries = []; S.docs = []; S.chat = []; S.apiHistory = []; location.hash = '#/home'; render(true);
+    await DB.wipe(); S.profile = { ...DEFAULT_PROFILE }; S.entries = []; S.docs = []; S.chat = []; S.apiHistory = []; location.hash = '#/home'; render(true);
   },
 };
 
@@ -414,8 +445,21 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const fn = ACT[el.dataset.act]; if (fn) { e.preventDefault(); Promise.resolve(fn(el)).catch(err => toast(err.message || 'Ошибка')); }
 });
+document.addEventListener('input', e => {
+  const t = e.target, row = t.closest && t.closest('.qrow');
+  if (row && t.name !== 'qfile') quickChange(row).catch(err => toast(err.message));
+  else if (t.id === 'paidInput') saveEntry({ id: paidId(), kind: 'pay', type: 'est_vz', amount: Number(t.value) || 0, date: S.year + '-12-31', desc: 'Уже уплачено за год' }).then(paintResult);
+});
 document.addEventListener('change', async e => {
   const t = e.target;
+  if (t.name === 'qfile' && t.files[0]) {
+    const row = t.closest('.qrow'), entry = await quickChange(row, true), doc = await addDoc(t.files[0]);
+    const name = doc.name.replace(/\.[^.]+$/, '');
+    await saveEntry({ ...entry, docId: doc.id, desc: entry.desc || name });
+    if (!$('[name=desc]', row).value) $('[name=desc]', row).value = name;
+    $('.clip', row).classList.add('on'); toast('Чек прикреплён'); return;
+  }
+  if (t.closest && t.closest('.qrow')) return;
   if (t.id === 'year') { S.year = Number(t.value); S.settings.year = S.year; saveSettings(); render(true); }
   else if (t.id === 'docInput') { for (const f of t.files) await addDoc(f); toast('Загружено: ' + t.files.length); render(); }
   else if (t.id === 'importInput' && t.files[0]) {
@@ -427,12 +471,12 @@ document.addEventListener('change', async e => {
 });
 document.addEventListener('submit', async e => {
   e.preventDefault(); const f = e.target, fd = Object.fromEntries(new FormData(f));
-  if (f.id === 'welcomeForm' || f.id === 'profileForm') {
+  if (f.id === 'profileForm') {
     S.profile = { ...(S.profile || { hebesatz: 400 }), name: (fd.name || '').trim(), status: fd.status, joint: !!fd.joint, kids: Number(fd.kids) || 0 };
     if (f.id === 'profileForm') Object.assign(S.profile, { church: Number(fd.church) || 0, single_parent: !!fd.single_parent, km: Number(fd.km) || 0, commuteDays: Number(fd.commuteDays) || 0,
       hoDays: Number(fd.hoDays) || 0, klein: !!fd.klein, hebesatz: Number(fd.hebesatz) || 400 });
     await DB.put('kv', S.profile, 'profile');
-    if (f.id === 'welcomeForm') { location.hash = '#/home'; render(true); } else { render(); toast('Профиль сохранён'); }
+    render(); toast('Профиль сохранён');
   } else if (f.id === 'entryForm') {
     const cur = formEntry(f);
     if (!(Number(cur.amount) > 0)) return toast('Введите сумму больше нуля');
@@ -454,15 +498,15 @@ for (const ev of ['dragover', 'drop']) document.addEventListener(ev, async e => 
 dlg().addEventListener('click', e => { if (e.target === dlg()) dlg().close(); });
 
 // ───────── Отрисовка ─────────
-const VIEWS = { home: viewHome, entries: viewEntries, docs: viewDocs, chat: viewChat, profile: viewProfile };
+const DEFAULT_PROFILE = { name: '', status: 'angestellt', joint: false, kids: 0, church: 0, hebesatz: 400 };
+const VIEWS = { home: viewHome, details: viewDetails, entries: viewEntries, docs: viewDocs, chat: viewChat, profile: viewProfile };
 function render(animate = false) {
   let route = location.hash.replace(/^#\//, '') || 'home';
   if (!VIEWS[route]) route = 'home';
-  const welcome = !S.profile;
-  document.body.classList.toggle('onboarding', welcome);
+  const welcome = false;
   document.body.dataset.route = route;
   const changed = route !== S.route; S.route = route;
-  $('#view').innerHTML = welcome ? viewWelcome() : VIEWS[route]();
+  $('#view').innerHTML = VIEWS[route]();
   document.querySelectorAll('.nav a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === '#/' + route ? 'page' : 'false'));
   $('#year').value = S.year;
   if (route === 'chat') { const m = $('#msgs'); if (m) m.scrollTop = m.scrollHeight; if (!S.busy && matchMedia('(min-width: 800px)').matches) $('#chatForm textarea')?.focus(); }
@@ -476,8 +520,15 @@ function render(animate = false) {
   }
 }
 async function load() {
-  S.profile = (await DB.get('kv', 'profile')) || null;
-  S.entries = await DB.all('entries'); S.docs = await DB.all('docs');
+  S.profile = (await DB.get('kv', 'profile')) || { ...DEFAULT_PROFILE };
+  S.entries = await DB.all('entries');
+  // Убираем записи старого встроенного примера, если он был загружен
+  const DEMO = ['Зарплата за год, Muster GmbH', 'Комиссия, 1-й квартал', 'Комиссия, 2-й квартал', 'Комиссия, 3-й квартал', 'Проценты и дивиденды', 'Ноутбук Lenovo', 'Курс немецкого C1', 'Подписки: CRM и облако', 'Реклама в соцсетях', 'Поездки к клиентам: 4 200 км × 0,30 €', 'Обеды с клиентами', 'Steuerberater', 'Kranken- и Pflegeversicherung', 'Rentenversicherung', 'Haftpflicht и Unfall', 'Пожертвование', 'Детский сад', 'Стоматолог, доплата', 'Nebenkosten: уборка и сад', 'Vorauszahlung'];
+  if (S.profile.name === 'Алекс' && S.entries.some(e => e.desc === DEMO[0])) {
+    for (const e of S.entries.filter(x => DEMO.includes(x.desc))) await DB.del('entries', e.id);
+    S.entries = S.entries.filter(x => !DEMO.includes(x.desc));
+    S.profile = { ...DEFAULT_PROFILE }; await DB.put('kv', S.profile, 'profile');
+  } S.docs = await DB.all('docs');
   S.chat = (await DB.all('chat')).sort((a, b) => a.t - b.t);
 }
 async function boot() {
@@ -485,6 +536,7 @@ async function boot() {
   S.year = YEARS.includes(S.settings.year) ? S.settings.year : YEARS[0];
   $('#year').innerHTML = YEARS.map(y => `<option value="${y}">${y}</option>`).join('');
   document.querySelectorAll('[data-fry]').forEach(el => { el.innerHTML = FRY_SVG; });
+  S.profile = { ...DEFAULT_PROFILE };
   try { await load(); } catch { toast('Браузер не дал доступ к хранилищу. Данные не сохранятся.'); }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   addEventListener('hashchange', () => render());
